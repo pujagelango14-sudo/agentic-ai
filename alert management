@@ -1,0 +1,6 @@
+### 5. Alert Management (`AlertManager`)
+Generates actionable alerts based on specific deteriorating contract conditions.
+- Triggers categorized severity notifications for:
+  - Contracts expiring within short timeframes (e.g., within 30 days).
+  - Contracts designated with HIGH or CRITICAL risk levels.
+  - Contracts identified as NON_COMPLIANT on recent compliance reviews.

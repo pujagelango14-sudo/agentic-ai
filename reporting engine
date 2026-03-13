@@ -1,0 +1,3 @@
+### 6. Reporting Engine (`ReportingEngine`)
+Designed to fuel front-end dashboards with summary metrics and analytical breakdowns.
+- **`generate_executive_summary`**: Provides a comprehensive snapshot of the system, calculating total contract values, active counts, expiration warnings, and generating distributions across vendor breakdowns and general compliance statuses.

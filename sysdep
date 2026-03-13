@@ -1,0 +1,4 @@
+## System Dependencies
+- `pydantic`: For data modeling and rigorous validation (`BaseModel`).
+- `numpy`: Often used for metric/score computation.
+- Built-in Python Standard Libraries: `sqlite3`, `json`, `datetime`, `hashlib`, `enum`, `dataclasses`, `typing`, `logging`, `abc`, `os`.

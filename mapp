@@ -1,0 +1,6 @@
+### 7. Main Application Orchestrator (`ContractMonitoringSystem`)
+The primary unified macro-interface for interacting with the entire monitoring system.
+- Encapsulates and initializes the database, monitoring, alert, and reporting engines together.
+- Provides robust top-level methods like `ingest_contract` for adding new agreements into the analysis loop.
+- **`get_dashboard_data`**: Packages the executive summary, upcoming expiration warnings, and critical risk alerts into a cohesive, ready-to-consume dictionary payload for immediate UI/API hydration.
+- **`run_monitoring_cycle`**: Executes a complete system-wide scheduled monitoring sweep over all stored contracts.

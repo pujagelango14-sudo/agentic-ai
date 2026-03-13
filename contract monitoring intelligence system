@@ -1,0 +1,9 @@
+### 1. Data Models
+Defines the core data structures and enumerations used throughout the system.
+- **Enums**: `ContractStatus`, `RiskLevel`, `ComplianceStatus`
+- **Dataclasses**: 
+  - `ContractTerm`: Represents a key term/clause extracted from a contract.
+  - `RiskAssessment`: Represents the risk factors, level, and mitigation actions for a contract.
+  - `ComplianceCheck`: Represents the status of a specific compliance requirement.
+- **BaseModel (Pydantic)**: 
+  - `Contract`: The main data model representing a contract entity, containing all metadata, terms, obligations, risks, and compliance status.

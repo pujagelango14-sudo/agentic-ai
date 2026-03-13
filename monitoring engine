@@ -1,0 +1,5 @@
+### 4. Monitoring Engine (`MonitoringEngine`)
+The core orchestrator for analyzing and updating contract metrics.
+- **`analyze_contract`**: Runs full term extraction, risk assessment, and compliance checks on a single given contract, then updates its overall status based on timelines (e.g., ACTIVE, EXPIRED, EXPIRING_SOON) and saves the fully analyzed state to the database.
+- **`monitor_all_contracts`**: Triggers the `analyze_contract` pipeline across all active agreements and aggregates the overarching execution results.
+- Exposes utility methods to rapidly fetch subsets of contracts like those expiring soon or with excessive risk.

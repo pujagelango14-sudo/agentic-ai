@@ -1,0 +1,5 @@
+### 3. Contract Analysis Engine
+An extensible analysis pipeline based on the `ContractAnalyzer` abstract base class.
+- **`TermExtractor`**: A simulated NLP/ML module to find key terms (e.g., payment terms, renewal, termination, liability, confidentiality) within the contract text.
+- **`RiskAssessor`**: Evaluates the contract based on predefined risk indicators (e.g., unlimited liability, auto-renewal) and financial thresholds to calculate an overall risk score and level (LOW to CRITICAL), additionally providing automated mitigation actions.
+- **`ComplianceChecker`**: Validates basic compliance heuristics such as start/end date validity, and the presence of critical fields (e.g., vendor, client, value).

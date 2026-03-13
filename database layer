@@ -1,0 +1,5 @@
+### 2. Database Layer (`ContractDatabase`)
+A local SQLite-based database handling the storage and retrieval of contract data.
+- Automatically initializes the local database schema (`contracts`, `contract_events`, `alerts` tables).
+- Supports transactional operations like `save_contract`, `get_contract`, `get_all_contracts`, and `log_event`.
+- Handles JSON serialization and deserialization for complex nested data structures (lists, dicts, internal dataclasses) directly into SQLite text fields

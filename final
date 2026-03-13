@@ -1,0 +1,788 @@
+"""
+Contract Monitoring Intelligence System
+A comprehensive system for tracking, analyzing, and monitoring contracts
+with AI-powered insights, compliance checking, and real-time alerting.
+"""
+
+import os
+import json
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple, Any
+from dataclasses import dataclass, asdict, field
+from enum import Enum
+import hashlib
+import logging
+from abc import ABC, abstractmethod
+import sqlite3
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+# ==================== Data Models ====================
+
+class ContractStatus(str, Enum):
+    ACTIVE = "active"
+    EXPIRED = "expired"
+    EXPIRING_SOON = "expiring_soon"
+    PENDING = "pending"
+    SUSPENDED = "suspended"
+    TERMINATED = "terminated"
+
+
+class RiskLevel(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class ComplianceStatus(str, Enum):
+    COMPLIANT = "compliant"
+    NON_COMPLIANT = "non_compliant"
+    PARTIAL = "partial"
+    UNKNOWN = "unknown"
+
+
+@dataclass
+class ContractTerm:
+    """Represents a key term/clause extracted from a contract"""
+    key: str
+    value: str
+    category: str
+    extracted_at: datetime
+    confidence_score: float = 1.0
+
+
+@dataclass
+class RiskAssessment:
+    """Risk assessment for a contract"""
+    risk_level: RiskLevel
+    risk_factors: List[str]
+    mitigation_actions: List[str]
+    assessed_at: datetime
+    assessment_score: float  # 0-100
+
+
+@dataclass
+class ComplianceCheck:
+    """Compliance check result"""
+    check_name: str
+    status: ComplianceStatus
+    description: str
+    checked_at: datetime
+    last_verified: datetime
+    next_review: datetime
+
+
+@dataclass
+class Contract:
+    """Main Contract Model"""
+    contract_id: str
+    name: str
+    vendor: str
+    client: str
+    start_date: datetime
+    end_date: datetime
+    value: float
+    currency: str = "USD"
+    status: ContractStatus = ContractStatus.PENDING
+    document_path: Optional[str] = None
+    extracted_terms: Dict[str, str] = field(default_factory=dict)
+    key_dates: Dict[str, datetime] = field(default_factory=dict)
+    obligations: List[str] = field(default_factory=list)
+    risks: Optional[RiskAssessment] = None
+    compliance_checks: List[ComplianceCheck] = field(default_factory=list)
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
+    metadata: Dict = field(default_factory=dict)
+
+
+# ==================== Database Layer ====================
+
+class ContractDatabase:
+    """SQLite database for contract storage and retrieval"""
+
+    def __init__(self, db_path: str = "contracts.db"):
+        self.db_path = db_path
+        self.init_db()
+
+    def init_db(self):
+        """Initialize database schema"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS contracts (
+                contract_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                vendor TEXT NOT NULL,
+                client TEXT NOT NULL,
+                start_date TIMESTAMP,
+                end_date TIMESTAMP,
+                value REAL,
+                currency TEXT,
+                status TEXT,
+                document_path TEXT,
+                extracted_terms TEXT,
+                key_dates TEXT,
+                obligations TEXT,
+                risks TEXT,
+                compliance_checks TEXT,
+                created_at TIMESTAMP,
+                updated_at TIMESTAMP,
+                metadata TEXT
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS contract_events (
+                event_id TEXT PRIMARY KEY,
+                contract_id TEXT,
+                event_type TEXT,
+                event_data TEXT,
+                created_at TIMESTAMP,
+                FOREIGN KEY (contract_id) REFERENCES contracts(contract_id)
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS alerts (
+                alert_id TEXT PRIMARY KEY,
+                contract_id TEXT,
+                alert_type TEXT,
+                severity TEXT,
+                message TEXT,
+                is_resolved BOOLEAN,
+                created_at TIMESTAMP,
+                resolved_at TIMESTAMP,
+                FOREIGN KEY (contract_id) REFERENCES contracts(contract_id)
+            )
+        ''')
+
+        conn.commit()
+        conn.close()
+        logger.info("Database initialized successfully")
+
+    def save_contract(self, contract: Contract) -> bool:
+        """Save or update contract in database"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            contract_risks = contract.risks
+
+            contract_data = {
+                'contract_id': contract.contract_id,
+                'name': contract.name,
+                'vendor': contract.vendor,
+                'client': contract.client,
+                'start_date': contract.start_date.isoformat(),
+                'end_date': contract.end_date.isoformat(),
+                'value': contract.value,
+                'currency': contract.currency,
+                'status': contract.status.value,
+                'document_path': contract.document_path,
+                'extracted_terms': json.dumps(contract.extracted_terms),
+                'key_dates': json.dumps({k: v.isoformat() for k, v in contract.key_dates.items()}),
+                'obligations': json.dumps(contract.obligations),
+                'risks': json.dumps(asdict(contract_risks), default=str) if contract_risks else None,  # type: ignore
+                'compliance_checks': json.dumps([asdict(cc) for cc in contract.compliance_checks], default=str) if contract.compliance_checks else None,  # type: ignore
+                'created_at': contract.created_at.isoformat(),
+                'updated_at': contract.updated_at.isoformat(),
+                'metadata': json.dumps(contract.metadata)
+            }
+
+            cursor.execute('''
+                INSERT OR REPLACE INTO contracts VALUES (
+                    :contract_id, :name, :vendor, :client, :start_date, :end_date,
+                    :value, :currency, :status, :document_path, :extracted_terms,
+                    :key_dates, :obligations, :risks, :compliance_checks, :created_at,
+                    :updated_at, :metadata
+                )
+            ''', contract_data)
+
+            conn.commit()
+            conn.close()
+            logger.info(f"Contract {contract.contract_id} saved successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Error saving contract: {str(e)}")
+            return False
+
+    def get_contract(self, contract_id: str) -> Optional[Contract]:
+        """Retrieve contract by ID"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM contracts WHERE contract_id = ?', (contract_id,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if row:
+                # Reconstruct contract from row data
+                return self._row_to_contract(row)
+            return None
+        except Exception as e:
+            logger.error(f"Error retrieving contract: {str(e)}")
+            return None
+
+    def get_all_contracts(self, status_filter: Optional[ContractStatus] = None) -> List[Contract]:
+        """Retrieve all contracts, optionally filtered by status"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            if status_filter:
+                cursor.execute('SELECT * FROM contracts WHERE status = ?', (status_filter.value,))
+            else:
+                cursor.execute('SELECT * FROM contracts')
+
+            rows = cursor.fetchall()
+            conn.close()
+            return [self._row_to_contract(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Error retrieving contracts: {str(e)}")
+            return []
+
+    def _row_to_contract(self, row: tuple) -> Contract:
+        """Convert database row to Contract object"""
+        return Contract(
+            contract_id=row[0],
+            name=row[1],
+            vendor=row[2],
+            client=row[3],
+            start_date=datetime.fromisoformat(row[4]),
+            end_date=datetime.fromisoformat(row[5]),
+            value=row[6],
+            currency=row[7],
+            status=ContractStatus(row[8]),  # type: ignore
+            document_path=row[9],
+            extracted_terms=json.loads(row[10]) if row[10] else {},
+            key_dates={k: datetime.fromisoformat(v) for k, v in json.loads(row[11]).items()} if row[11] else {},
+            obligations=json.loads(row[12]) if row[12] else [],
+            metadata=json.loads(row[17]) if row[17] else {}
+        )
+
+    def log_event(self, contract_id: str, event_type: str, event_data: Dict) -> bool:
+        """Log an event related to a contract"""
+        try:
+            event_id = hashlib.md5(f"{contract_id}{event_type}{datetime.now()}".encode()).hexdigest()
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                INSERT INTO contract_events (event_id, contract_id, event_type, event_data, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (event_id, contract_id, event_type, json.dumps(event_data), datetime.now().isoformat()))
+
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Error logging event: {str(e)}")
+            return False
+
+
+# ==================== Contract Analysis Engine ====================
+
+class ContractAnalyzer(ABC):
+    """Abstract base class for contract analysis"""
+
+    @abstractmethod
+    def analyze(self, contract: Contract) -> Dict:
+        """Analyze contract and return insights"""
+        ...
+
+
+class TermExtractor(ContractAnalyzer):
+    """Extract key terms and clauses from contracts"""
+
+    def __init__(self):
+        # Define key term patterns
+        self.term_patterns = {
+            'payment_terms': ['net 30', 'net 60', 'due upon receipt', 'payment terms'],
+            'renewal': ['auto renewal', 'renewal', 'renews'],
+            'termination': ['termination', 'cancel', 'early termination'],
+            'liability': ['liability', 'indemnification', 'damages'],
+            'confidentiality': ['confidential', 'nda', 'proprietary'],
+        }
+
+    def analyze(self, contract: Contract) -> Dict:
+        """Extract terms from contract"""
+        extracted_terms = {}
+
+        for category, patterns in self.term_patterns.items():
+            for pattern in patterns:
+                # Simulate term extraction (in real implementation, use NLP/ML)
+                if pattern in contract.name.lower():
+                    extracted_terms[category] = pattern
+                    break
+
+        return {
+            'extracted_terms': extracted_terms,
+            'confidence': 0.85,
+            'timestamp': datetime.now()
+        }
+
+
+class RiskAssessor(ContractAnalyzer):
+    """Assess risks in contracts"""
+
+    def __init__(self):
+        self.risk_indicators = {
+            'unlimited_liability': 0.9,
+            'auto_renewal': 0.6,
+            'short_notice_termination': 0.7,
+            'broad_indemnification': 0.8,
+            'vendor_lock_in': 0.75,
+        }
+
+    def analyze(self, contract: Contract) -> Dict:
+        """Assess contract risks"""
+        risk_factors = []
+        risk_score = 0.0
+        identified_risks = []
+
+        # Simulate risk assessment
+        if contract.value > 100000:
+            risk_factors.append("High contract value - requires careful monitoring")
+            identified_risks.append('unlimited_liability')
+            risk_score += self.risk_indicators['unlimited_liability']
+
+        if 'auto' in contract.name.lower():
+            risk_factors.append("Auto-renewal clause detected")
+            identified_risks.append('auto_renewal')
+            risk_score += self.risk_indicators['auto_renewal']
+
+        # Calculate average risk score
+        if identified_risks:
+            risk_score = risk_score / len(identified_risks) * 100
+        else:
+            risk_score = 20.0  # Low risk if no issues detected
+
+        # Determine risk level
+        if risk_score >= 80:
+            risk_level = RiskLevel.CRITICAL
+        elif risk_score >= 60:
+            risk_level = RiskLevel.HIGH
+        elif risk_score >= 40:
+            risk_level = RiskLevel.MEDIUM
+        else:
+            risk_level = RiskLevel.LOW
+
+        mitigation_actions = [
+            "Review contract with legal team",
+            "Implement monitoring alerts for key dates",
+            "Document all amendments",
+            "Schedule quarterly compliance reviews"
+        ]
+
+        return {
+            'risk_assessment': {
+                'risk_level': risk_level,
+                'risk_factors': risk_factors,
+                'risk_score': risk_score,
+                'mitigation_actions': mitigation_actions,
+                'assessed_at': datetime.now()
+            }
+        }
+
+
+class ComplianceChecker(ContractAnalyzer):
+    """Check contract compliance requirements"""
+
+    def analyze(self, contract: Contract) -> Dict:
+        """Check compliance requirements"""
+        compliance_checks = []
+
+        # Check 1: Start date is in the past
+        check1 = ComplianceCheck(
+            check_name="Start Date Validity",
+            status=ComplianceStatus.COMPLIANT if contract.start_date <= datetime.now() else ComplianceStatus.NON_COMPLIANT,
+            description="Verify contract start date is valid",
+            checked_at=datetime.now(),
+            last_verified=datetime.now(),
+            next_review=datetime.now() + timedelta(days=90)
+        )
+        compliance_checks.append(check1)
+
+        # Check 2: End date is in the future
+        check2 = ComplianceCheck(
+            check_name="End Date Validity",
+            status=ComplianceStatus.COMPLIANT if contract.end_date > datetime.now() else ComplianceStatus.PARTIAL,
+            description="Verify contract end date is valid",
+            checked_at=datetime.now(),
+            last_verified=datetime.now(),
+            next_review=datetime.now() + timedelta(days=90)
+        )
+        compliance_checks.append(check2)
+
+        # Check 3: Required fields
+        check3 = ComplianceCheck(
+            check_name="Required Fields",
+            status=ComplianceStatus.COMPLIANT if all([contract.vendor, contract.client, contract.value]) else ComplianceStatus.NON_COMPLIANT,
+            description="Verify all required contract fields are populated",
+            checked_at=datetime.now(),
+            last_verified=datetime.now(),
+            next_review=datetime.now() + timedelta(days=30)
+        )
+        compliance_checks.append(check3)
+
+        return {
+            'compliance_checks': compliance_checks
+        }
+
+
+# ==================== Monitoring Engine ====================
+
+class MonitoringEngine:
+    """Core monitoring engine for contracts"""
+
+    def __init__(self, db: ContractDatabase):
+        self.db = db
+        self.term_extractor = TermExtractor()
+        self.risk_assessor = RiskAssessor()
+        self.compliance_checker = ComplianceChecker()
+
+    def analyze_contract(self, contract: Contract) -> Contract:
+        """Run complete analysis on contract"""
+        logger.info(f"Analyzing contract: {contract.contract_id}")
+
+        # Extract terms
+        term_analysis = self.term_extractor.analyze(contract)
+        contract.extracted_terms.update(term_analysis.get('extracted_terms', {}))
+
+        # Assess risks
+        risk_analysis = self.risk_assessor.analyze(contract)
+        if 'risk_assessment' in risk_analysis:
+            ra = risk_analysis['risk_assessment']
+            contract.risks = RiskAssessment(
+                risk_level=ra['risk_level'],
+                risk_factors=ra['risk_factors'],
+                mitigation_actions=ra['mitigation_actions'],
+                assessed_at=ra['assessed_at'],
+                assessment_score=ra['risk_score']
+            )
+
+        # Check compliance
+        compliance_analysis = self.compliance_checker.analyze(contract)
+        contract.compliance_checks = compliance_analysis.get('compliance_checks', [])
+
+        # Update contract status
+        contract.status = self._determine_status(contract)
+        contract.updated_at = datetime.now()
+
+        # Save to database
+        self.db.save_contract(contract)
+
+        return contract
+
+    def monitor_all_contracts(self) -> Dict:
+        """Monitor all active contracts"""
+        contracts = self.db.get_all_contracts()
+        results: Dict[str, Any] = {
+            'total_contracts': len(contracts),
+            'analyzed': 0,
+            'alerts_generated': 0,
+            'contracts_by_status': {},
+            'contracts_by_risk': {}
+        }
+
+        for contract in contracts:
+            self.analyze_contract(contract)
+            results['analyzed'] += 1
+
+            # Count by status
+            status = contract.status.value
+            results['contracts_by_status'][status] = results['contracts_by_status'].get(status, 0) + 1
+
+            # Count by risk
+            contract_risks = contract.risks
+            if contract_risks is not None:
+                risk = contract_risks.risk_level.value
+                results['contracts_by_risk'][risk] = results['contracts_by_risk'].get(risk, 0) + 1
+
+        return results
+
+    def _determine_status(self, contract: Contract) -> ContractStatus:
+        """Determine contract status based on dates"""
+        now = datetime.now()
+        days_until_expiry = (contract.end_date - now).days
+
+        if contract.end_date < now:
+            return ContractStatus.EXPIRED
+        elif 0 < days_until_expiry <= 30:
+            return ContractStatus.EXPIRING_SOON
+        else:
+            return ContractStatus.ACTIVE
+
+    def get_expiring_contracts(self, days: int = 30) -> List[Contract]:
+        """Get contracts expiring within specified days"""
+        contracts = self.db.get_all_contracts()
+        now = datetime.now()
+        expiring = []
+
+        for contract in contracts:
+            days_until_expiry = (contract.end_date - now).days
+            if 0 < days_until_expiry <= days:
+                expiring.append(contract)
+
+        return sorted(expiring, key=lambda c: c.end_date)
+
+    def get_high_risk_contracts(self) -> List[Contract]:
+        """Get high-risk and critical-risk contracts"""
+        contracts = self.db.get_all_contracts()
+        high_risk = [
+            c for c in contracts
+            if (risks := c.risks) is not None and risks.risk_level in [RiskLevel.HIGH, RiskLevel.CRITICAL]
+        ]
+        return high_risk
+
+
+# ==================== Alert Management ====================
+
+class AlertManager:
+    """Manage alerts and notifications"""
+
+    def __init__(self, db: ContractDatabase):
+        self.db = db
+        self.alerts = []
+
+    def generate_alerts(self, contract: Contract) -> List[Dict]:
+        """Generate alerts for contract conditions"""
+        alerts = []
+
+        # Alert: Contract expiring soon
+        now = datetime.now()
+        days_until_expiry = (contract.end_date - now).days
+        if 0 < days_until_expiry <= 30:
+            alerts.append({
+                'type': 'EXPIRATION_WARNING',
+                'severity': 'high' if days_until_expiry <= 7 else 'medium',
+                'message': f"Contract {contract.name} expires in {days_until_expiry} days",
+                'contract_id': contract.contract_id,
+                'action_required': True
+            })
+
+        # Alert: High risk contract
+        risks = contract.risks
+        if risks is not None and risks.risk_level in [RiskLevel.HIGH, RiskLevel.CRITICAL]:
+            alerts.append({
+                'type': 'HIGH_RISK',
+                'severity': 'critical' if risks.risk_level == RiskLevel.CRITICAL else 'high',
+                'message': f"Contract {contract.name} has {risks.risk_level.value} risk level",
+                'contract_id': contract.contract_id,
+                'action_required': True
+            })
+
+        # Alert: Non-compliance
+        non_compliant = [
+            cc for cc in contract.compliance_checks
+            if cc.status == ComplianceStatus.NON_COMPLIANT
+        ]
+        if non_compliant:
+            alerts.append({
+                'type': 'COMPLIANCE_ISSUE',
+                'severity': 'high',
+                'message': f"Contract {contract.name} has {len(non_compliant)} compliance issues",
+                'contract_id': contract.contract_id,
+                'action_required': True
+            })
+
+        return alerts
+
+
+# ==================== Reporting Engine ====================
+
+class ReportingEngine:
+    """Generate reports and dashboards"""
+
+    def __init__(self, monitoring_engine: MonitoringEngine):
+        self.monitoring_engine = monitoring_engine
+
+    def generate_executive_summary(self) -> Dict:
+        """Generate executive summary report"""
+        contracts = self.monitoring_engine.db.get_all_contracts()
+
+        total_value = sum(c.value for c in contracts)
+        active_contracts = len([c for c in contracts if c.status == ContractStatus.ACTIVE])
+        expiring_soon = len(self.monitoring_engine.get_expiring_contracts(30))
+        high_risk = len(self.monitoring_engine.get_high_risk_contracts())
+
+        summary = {
+            'report_date': datetime.now().isoformat(),
+            'total_contracts': len(contracts),
+            'total_contract_value': total_value,
+            'active_contracts': active_contracts,
+            'expiring_soon_30_days': expiring_soon,
+            'high_risk_contracts': high_risk,
+            'status_distribution': self._get_status_distribution(contracts),
+            'vendor_breakdown': self._get_vendor_breakdown(contracts),
+            'compliance_status': self._get_compliance_status(contracts)
+        }
+
+        return summary
+
+    def _get_status_distribution(self, contracts: List[Contract]) -> Dict:
+        """Get distribution of contract statuses"""
+        distribution = {}
+        for contract in contracts:
+            status = contract.status.value
+            distribution[status] = distribution.get(status, 0) + 1
+        return distribution
+
+    def _get_vendor_breakdown(self, contracts: List[Contract]) -> Dict[str, float]:
+        """Get contract value breakdown by vendor"""
+        breakdown: Dict[str, float] = {}
+        for contract in contracts:
+            vendor = contract.vendor
+            breakdown[vendor] = breakdown.get(vendor, 0.0) + contract.value
+        return breakdown
+
+    def _get_compliance_status(self, contracts: List[Contract]) -> Dict[str, int]:
+        """Get overall compliance status"""
+        return {
+            'compliant': sum(1 for c in contracts for check in c.compliance_checks if check.status == ComplianceStatus.COMPLIANT),
+            'non_compliant': sum(1 for c in contracts for check in c.compliance_checks if check.status == ComplianceStatus.NON_COMPLIANT),
+            'partial': sum(1 for c in contracts for check in c.compliance_checks if check.status not in (ComplianceStatus.COMPLIANT, ComplianceStatus.NON_COMPLIANT))
+        }
+
+
+# ==================== Main Application ====================
+
+class ContractMonitoringSystem:
+    """Main application orchestrator"""
+
+    def __init__(self, db_path: str = "contracts.db"):
+        self.db = ContractDatabase(db_path)
+        self.monitoring_engine = MonitoringEngine(self.db)
+        self.alert_manager = AlertManager(self.db)
+        self.reporting_engine = ReportingEngine(self.monitoring_engine)
+
+    def ingest_contract(self, contract_data: Dict) -> Contract:
+        """Ingest a new contract"""
+        contract = Contract(
+            contract_id=hashlib.md5(f"{contract_data['name']}{datetime.now()}".encode()).hexdigest(),
+            **contract_data
+        )
+        return self.monitoring_engine.analyze_contract(contract)
+
+    def get_dashboard_data(self) -> Dict:
+        """Get comprehensive dashboard data"""
+        summary = self.reporting_engine.generate_executive_summary()
+        expiring = self.monitoring_engine.get_expiring_contracts(30)
+        high_risk = self.monitoring_engine.get_high_risk_contracts()
+
+        return {
+            'summary': summary,
+            'expiring_contracts': [
+                {
+                    'id': c.contract_id,
+                    'name': c.name,
+                    'vendor': c.vendor,
+                    'end_date': c.end_date.isoformat(),
+                    'days_until_expiry': (c.end_date - datetime.now()).days
+                }
+                for c in expiring
+            ],
+            'high_risk_contracts': [
+                {
+                    'id': c.contract_id,
+                    'name': c.name,
+                    'vendor': c.vendor,
+                    'risk_level': getattr(c.risks, 'risk_level').value if c.risks else None,
+                    'risk_score': getattr(c.risks, 'assessment_score') if c.risks else None
+                }
+                for c in high_risk
+            ]
+        }
+
+    def run_monitoring_cycle(self) -> Dict:
+        """Execute a complete monitoring cycle"""
+        logger.info("Starting monitoring cycle")
+        results = self.monitoring_engine.monitor_all_contracts()
+        logger.info(f"Monitoring cycle completed: {results}")
+        return results
+
+
+# ==================== Example Usage ====================
+
+def main():
+    """Demonstrate system usage"""
+    # Initialize system
+    system = ContractMonitoringSystem()
+
+    # Sample contracts to ingest
+    sample_contracts = [
+        {
+            'name': 'AWS Cloud Services Contract',
+            'vendor': 'Amazon Web Services',
+            'client': 'Acme Corp',
+            'start_date': datetime.now() - timedelta(days=180),
+            'end_date': datetime.now() + timedelta(days=45),
+            'value': 250000.00,
+            'currency': 'USD',
+            'key_dates': {'renewal': datetime.now() + timedelta(days=45)},
+            'obligations': ['Monthly reporting', 'Security compliance', 'Performance SLA']
+        },
+        {
+            'name': 'Vendor Auto Renewal Agreement',
+            'vendor': 'Tech Vendor Inc',
+            'client': 'Acme Corp',
+            'start_date': datetime.now() - timedelta(days=365),
+            'end_date': datetime.now() + timedelta(days=15),
+            'value': 50000.00,
+            'currency': 'USD',
+            'key_dates': {'last_renewal': datetime.now() - timedelta(days=30)},
+            'obligations': ['License maintenance', 'Support provision']
+        },
+        {
+            'name': 'Legal Services Contract',
+            'vendor': 'Law Firm Partners',
+            'client': 'Acme Corp',
+            'start_date': datetime.now() - timedelta(days=90),
+            'end_date': datetime.now() + timedelta(days=180),
+            'value': 100000.00,
+            'currency': 'USD',
+            'key_dates': {'review_date': datetime.now() + timedelta(days=90)},
+            'obligations': ['Quarterly reviews', 'Document updates']
+        }
+    ]
+
+    # Ingest contracts
+    print("\n=== Ingesting Contracts ===")
+    for contract_data in sample_contracts:
+        contract = system.ingest_contract(contract_data)
+        short_id = contract.contract_id[:8]  # type: ignore
+        print(f"✓ Ingested: {contract.name} ({short_id}...)")
+
+    # Get dashboard data
+    print("\n=== Dashboard Summary ===")
+    dashboard = system.get_dashboard_data()
+    print(json.dumps(dashboard['summary'], indent=2, default=str))
+
+    # Show expiring contracts
+    print("\n=== Contracts Expiring Soon ===")
+    for contract in dashboard['expiring_contracts']:
+        print(f"  • {contract['name']}: {contract['days_until_expiry']} days remaining")
+
+    # Show high-risk contracts
+    print("\n=== High-Risk Contracts ===")
+    for contract in dashboard['high_risk_contracts']:
+        print(f"  • {contract['name']}: {contract['risk_level'].upper()} (Score: {contract['risk_score']:.1f})")
+
+    # Run monitoring cycle
+    print("\n=== Running Monitoring Cycle ===")
+    results = system.run_monitoring_cycle()
+    print(json.dumps(results, indent=2, default=str))
+
+    print("\n✓ System demonstration completed")
+
+
+if __name__ == "__main__":
+    main()
